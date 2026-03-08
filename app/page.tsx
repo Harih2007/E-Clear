@@ -48,7 +48,7 @@ export default function Home() {
 
             <div className="flex flex-wrap gap-5 justify-center">
               <Link href="/dashboard/user">
-                <Button size="lg" className="h-16 px-10 text-lg font-bold rounded-xl transition-all hover:scale-105 border-0 shadow-2xl group" 
+                <div className="flex h-16 w-max px-10 text-lg font-bold rounded-xl transition-all hover:scale-105 border-0 shadow-2xl group items-center justify-center cursor-pointer" 
                         style={{ 
                           backgroundColor: '#2DFF7A', 
                           color: '#0B0F0E',
@@ -56,7 +56,7 @@ export default function Home() {
                         }}>
                   Schedule Pickup
                   <ArrowRight className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" />
-                </Button>
+                </div>
               </Link>
               <Button 
                 variant="outline" 
@@ -383,8 +383,8 @@ export default function Home() {
             className="pt-6 border-t border-emerald-100"
           >
             <Link href="/auth/register">
-              <Button 
-                className="w-full h-14 font-bold rounded-xl transition-all hover:scale-105 shadow-lg text-lg group" 
+              <div 
+                className="w-full flex items-center justify-center h-14 font-bold rounded-xl transition-all hover:scale-105 shadow-lg text-lg group cursor-pointer" 
                 style={{ 
                   backgroundColor: '#2DFF7A', 
                   color: '#0B0F0E',
@@ -392,7 +392,7 @@ export default function Home() {
                 }}>
                 Start Your First Pickup
                 <ArrowRight className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" />
-              </Button>
+              </div>
             </Link>
             <p className="text-center text-xs text-gray-500 mt-3">
               Join 1000+ households making a difference

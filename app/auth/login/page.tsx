@@ -51,7 +51,7 @@ export default function LoginPage() {
                                         Schedule e-waste pickups and earn rewards
                                     </p>
                                 </div>
-                                <Button 
+                                <div 
                                     className="w-full h-12 font-bold rounded-xl transition-all flex items-center justify-center gap-2"
                                     style={{ 
                                         backgroundColor: '#2DFF7A', 
@@ -59,7 +59,7 @@ export default function LoginPage() {
                                     }}>
                                     Login as User
                                     <ArrowRight className="h-5 w-5" />
-                                </Button>
+                                </div>
                             </div>
                         </motion.div>
                     </Link>
@@ -96,7 +96,7 @@ export default function LoginPage() {
                                         Manage pickups and recycling operations
                                     </p>
                                 </div>
-                                <Button 
+                                <div 
                                     className="w-full h-12 font-bold rounded-xl transition-all flex items-center justify-center gap-2"
                                     style={{ 
                                         backgroundColor: '#2DFF7A', 
@@ -104,7 +104,7 @@ export default function LoginPage() {
                                     }}>
                                     Login as E-Centre
                                     <ArrowRight className="h-5 w-5" />
-                                </Button>
+                                </div>
                             </div>
                         </motion.div>
                     </Link>

@@ -21,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={cn("min-h-screen font-sans antialiased text-foreground", inter.variable)} style={{ backgroundColor: '#0B0F0E' }}>
+      <body suppressHydrationWarning className={cn("min-h-screen font-sans antialiased text-foreground", inter.variable)} style={{ backgroundColor: '#0B0F0E' }}>
         {/* Global Grid Background */}
         <div className="fixed inset-0 z-[-1] pointer-events-none">
           <GridScan
