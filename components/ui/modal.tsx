@@ -13,7 +13,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="relative w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg animate-in fade-in zoom-in duration-200">
                 <div className="flex items-center justify-between mb-4">
                     <h2 className="text-xl font-semibold tracking-tight">{title}</h2>

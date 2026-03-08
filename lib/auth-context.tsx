@@ -45,7 +45,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem("user", JSON.stringify(newUser));
         setToken(newToken);
         setUser(newUser);
-        router.push(newUser.role === "RECYCLER" ? "/dashboard/recycler" : "/dashboard/user");
+        // Route based on role: ECENTRE goes to recycler dashboard, USER goes to user dashboard
+        router.push(newUser.role === "ECENTRE" ? "/dashboard/recycler" : "/dashboard/user");
     };
 
     const logout = () => {

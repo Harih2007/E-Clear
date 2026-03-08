@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 @theme {
   --color-border: hsl(var(--border));
@@ -82,61 +83,48 @@
 }
 
 :root {
-  --background: 60 5% 96%;
-  --foreground: 24 10% 10%;
-  --card: 0 0% 100%;
-  --card-foreground: 24 10% 10%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 24 10% 10%;
-  --primary: 158 64% 52%;
-  --primary-foreground: 144 80% 98%;
-  --secondary: 60 4.8% 95.9%;
-  --secondary-foreground: 24 9.8% 10%;
-  --muted: 60 4.8% 95.9%;
-  --muted-foreground: 25 5.3% 44.7%;
-  --accent: 60 4.8% 95.9%;
-  --accent-foreground: 24 9.8% 10%;
+  --background: 160 20% 5%;
+  --foreground: 0 0% 95%;
+  --card: 160 15% 8%;
+  --card-foreground: 0 0% 95%;
+  --popover: 160 15% 8%;
+  --popover-foreground: 0 0% 95%;
+  --primary: 150 100% 59%;
+  --primary-foreground: 160 20% 5%;
+  --secondary: 0 0% 15%;
+  --secondary-foreground: 0 0% 95%;
+  --muted: 0 0% 20%;
+  --muted-foreground: 0 0% 60%;
+  --accent: 150 100% 59%;
+  --accent-foreground: 160 20% 5%;
   --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 60 9.1% 97.8%;
-  --border: 20 5.9% 90%;
-  --input: 20 5.9% 90%;
-  --ring: 158 64% 52%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 150 100% 59%;
+  --input: 160 15% 12%;
+  --ring: 150 100% 59%;
   --radius: 0.75rem;
 }
 
 .dark {
-  --background: 145 100% 1%;
-  /* #000502 Deep Black Green */
-  --foreground: 144 80% 98%;
-  /* Emerald 50 */
-
-  --card: 145 50% 3%;
-  /* Very dark green/black */
-  --card-foreground: 144 80% 98%;
-
-  --popover: 145 50% 3%;
-  --popover-foreground: 144 80% 98%;
-
-  --primary: 158 64% 52%;
-  /* Emerald 500 */
-  --primary-foreground: 144 80% 98%;
-
-  --secondary: 150 30% 10%;
-  /* Dark Emerald */
-  --secondary-foreground: 144 80% 98%;
-
-  --muted: 150 20% 10%;
-  --muted-foreground: 150 20% 60%;
-
-  --accent: 150 30% 15%;
-  --accent-foreground: 144 80% 98%;
-
+  --background: 160 20% 5%;
+  --foreground: 0 0% 95%;
+  --card: 160 15% 8%;
+  --card-foreground: 0 0% 95%;
+  --popover: 160 15% 8%;
+  --popover-foreground: 0 0% 95%;
+  --primary: 150 100% 59%;
+  --primary-foreground: 160 20% 5%;
+  --secondary: 0 0% 15%;
+  --secondary-foreground: 0 0% 95%;
+  --muted: 0 0% 20%;
+  --muted-foreground: 0 0% 60%;
+  --accent: 150 100% 59%;
+  --accent-foreground: 160 20% 5%;
   --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 60 9.1% 97.8%;
-
-  --border: 150 30% 15%;
-  --input: 150 30% 15%;
-  --ring: 158 64% 52%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 150 100% 59%;
+  --input: 160 15% 12%;
+  --ring: 150 100% 59%;
 }
 
 @layer base {
@@ -148,4 +136,58 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
   }
+}
+
+
+/* Leaflet Map Styles */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  z-index: 0;
+}
+
+.leaflet-pane {
+  z-index: 400;
+}
+
+.leaflet-tile-pane {
+  z-index: 200;
+}
+
+.leaflet-overlay-pane {
+  z-index: 400;
+}
+
+.leaflet-shadow-pane {
+  z-index: 500;
+}
+
+.leaflet-marker-pane {
+  z-index: 600;
+}
+
+.leaflet-tooltip-pane {
+  z-index: 650;
+}
+
+.leaflet-popup-pane {
+  z-index: 700;
+}
+
+.leaflet-map-pane canvas {
+  z-index: 100;
+}
+
+.leaflet-map-pane svg {
+  z-index: 200;
+}
+
+.leaflet-control {
+  z-index: 800;
+}
+
+/* Fix for marker icons */
+.leaflet-marker-icon {
+  margin-left: -12px !important;
+  margin-top: -41px !important;
 }

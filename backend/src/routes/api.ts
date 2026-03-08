@@ -1,31 +1,67 @@
 import { Router } from "express";
 import * as DisposalController from "../controllers/disposal.controller";
 import * as PickupController from "../controllers/pickup.controller";
-import * as DropOffController from "../controllers/dropoff.controller";
-import * as UserController from "../controllers/user.controller";
+import * as PoolingController from "../controllers/pooling.controller";
 import * as AuthController from "../controllers/auth.controller";
-import { authMiddleware } from "../middleware/auth.middleware";
+import { authenticate, isUser, isECentre, isUserOrAdmin, isECentreOrAdmin } from "../middleware/auth.middleware";
 
 const router = Router();
 
+// ============================================
+// PUBLIC ROUTES (No Authentication Required)
+// ============================================
+
 // Auth Routes
-router.post("/auth/register", AuthController.register);
+router.post("/auth/register", AuthController.registerUser); // User registration
+router.post("/auth/register/user", AuthController.registerUser); // Alias for clarity
+router.post("/auth/register/ecentre", AuthController.registerECentre);
 router.post("/auth/login", AuthController.login);
 
-// User Routes
-// router.post("/users", UserController.createUser); // Replaced by auth/register
+// ============================================
+// USER ROUTES (Household)
+// ============================================
 
-// Disposal Routes (Protected)
-router.post("/dispose", authMiddleware, DisposalController.createDisposalRequest);
-router.get("/user/:userId/requests", authMiddleware, DisposalController.getUserRequests);
+// Disposal Requests
+router.post("/disposal/request", authenticate, isUser, DisposalController.createDisposalRequest);
+router.get("/disposal/my-requests", authenticate, isUser, DisposalController.getUserRequests);
+router.get("/disposal/requests", authenticate, isECentre, DisposalController.getAllRequests);
+router.get("/disposal/grouping/:pincode", authenticate, isUser, DisposalController.getGroupingStatus);
 
+// View Nearby E-Centres
+router.get("/ecentres/nearby", authenticate, isUser, PickupController.getNearbyECentres);
 
-// Pickup Routes (Internal/Recycler)
-router.post("/pickup/schedule", PickupController.triggerPickupCheck);
-router.patch("/pickup/confirm", PickupController.confirmPickup);
-router.get("/pickups", PickupController.getPickups);
+// ============================================
+// E-CENTRE ROUTES (Recycling Centers)
+// ============================================
 
-// DropOff Routes
-router.get("/drop-off-points", DropOffController.getDropOffPoints);
+// Pickup Management
+router.post("/pickup/create", authenticate, isECentre, PickupController.createPickup);
+router.get("/pickup/my-pickups", authenticate, isECentre, PickupController.getECentrePickups);
+router.get("/pickup/:id/details", authenticate, isECentre, PickupController.getPickupDetails);
+router.patch("/pickup/:id/status", authenticate, isECentre, PickupController.updatePickupStatus);
+router.post("/pickup/:id/confirm", authenticate, isECentre, PickupController.confirmPickupAndReleaseIncentives);
+
+// View Available Clusters
+router.get("/pickup/clusters/available", authenticate, isECentre, PickupController.getAvailablePickupClusters);
+
+// Update Request Status (after pickup)
+router.patch("/disposal/:id/status", authenticate, isECentre, DisposalController.updateRequestStatus);
+
+// ============================================
+// POOLING SYSTEM
+// ============================================
+
+// E-Centre Pool Management
+router.get("/pools/my-pools", authenticate, isECentre, PoolingController.getMyPools);
+router.post("/pools/:poolId/accept", authenticate, isECentre, PoolingController.acceptPool);
+router.post("/pools/:poolId/schedule", authenticate, isECentre, PoolingController.schedulePool);
+router.post("/pools/:poolId/complete", authenticate, isECentre, PoolingController.completePool);
+
+// ============================================
+// SHARED ROUTES (Both USER and E-CENTRE)
+// ============================================
+
+// View specific disposal request (with privacy checks)
+router.get("/disposal/:id", authenticate, DisposalController.getDisposalRequest);
 
 export default router;
