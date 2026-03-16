@@ -1,56 +1,38 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth.middleware";
-import { DisposalRequestModel, PickupModel } from "../models/mongoose/schemas";
-import mongoose from "mongoose";
+import { supabase } from "../config/supabase";
+import { findNearestECentre, findOrCreatePool, updatePoolSummary } from "./pooling.controller";
 
-// Calculate estimated incentive based on item types
-const calculateIncentive = (items: any[]) => {
-    const baseRates: any = {
-        PHONE: { min: 50, max: 200 },
-        LAPTOP: { min: 200, max: 800 },
-        TABLET: { min: 100, max: 400 },
-        BATTERY: { min: 5, max: 20 },
-        CHARGER: { min: 10, max: 30 },
-        MONITOR: { min: 150, max: 500 },
-        OTHER: { min: 20, max: 100 }
-    };
-
-    let totalMin = 0;
-    let totalMax = 0;
-
-    items.forEach(item => {
-        const rate = baseRates[item.type] || baseRates.OTHER;
-        totalMin += rate.min * item.quantity;
-        totalMax += rate.max * item.quantity;
-    });
-
-    return { min: totalMin, max: totalMax };
+// Incentive rates
+const INCENTIVE_RATES: { [key: string]: { min: number; max: number } } = {
+    PHONE: { min: 50, max: 200 },
+    CHARGER: { min: 10, max: 30 },
+    BATTERY: { min: 20, max: 80 },
+    LAPTOP: { min: 200, max: 800 },
+    TABLET: { min: 100, max: 400 },
+    MONITOR: { min: 150, max: 500 },
+    OTHER: { min: 10, max: 100 },
 };
 
-// Check for grouping opportunities in the same area
-const checkGroupingOpportunity = async (pincode: string) => {
-    const pendingRequests = await DisposalRequestModel.find({
-        "location.pincode": pincode,
-        status: { $in: ["PENDING", "GROUPING"] }
-    });
-
-    return {
-        current: pendingRequests.length,
-        target: 5,
-        canSchedule: pendingRequests.length >= 5
-    };
+const calculateIncentive = (items: { type: string; quantity: number }[]) => {
+    let min = 0, max = 0;
+    for (const item of items) {
+        const rate = INCENTIVE_RATES[item.type] || INCENTIVE_RATES.OTHER;
+        min += rate.min * item.quantity;
+        max += rate.max * item.quantity;
+    }
+    return { min, max };
 };
 
-// Create Disposal Request (USER only)
+// Create Disposal Request
 export const createDisposalRequest = async (req: AuthRequest, res: Response) => {
     try {
         if (req.user?.role !== "USER") {
             return res.status(403).json({ error: "Only users can create disposal requests" });
         }
 
-        const { items, address, pincode } = req.body;
+        const { items, address, pincode, coordinates, description, imageUrl } = req.body;
 
-        // Validate inputs
         if (!items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ error: "Items are required" });
         }
@@ -58,81 +40,100 @@ export const createDisposalRequest = async (req: AuthRequest, res: Response) => 
             return res.status(400).json({ error: "Address and pincode are required" });
         }
 
-        // Check if user already has an active request
-        const activeRequest = await DisposalRequestModel.findOne({
-            userId: req.user._id,
-            status: { $in: ["PENDING", "GROUPING", "ACCEPTED", "SCHEDULED"] }
-        });
+        // Check for active request
+        const { data: activeReq } = await supabase
+            .from('disposal_requests')
+            .select('id')
+            .eq('user_id', req.user._id)
+            .in('status', ['PENDING', 'GROUPING', 'ACCEPTED', 'SCHEDULED'])
+            .limit(1)
+            .single();
 
-        if (activeRequest) {
-            return res.status(400).json({ 
-                error: "You already have an active pickup request. Please wait for it to complete." 
-            });
+        if (activeReq) {
+            return res.status(400).json({ error: "You already have an active pickup request." });
         }
 
-        // Calculate estimated incentive
         const estimatedIncentive = calculateIncentive(items);
 
         // Find nearest E-Centre
-        const { findNearestECentre, findOrCreatePool, updatePoolSummary } = require("./pooling.controller");
-        const eCentre = await findNearestECentre(pincode);
-
+        const eCentre = await findNearestECentre(pincode, coordinates);
         if (!eCentre) {
-            return res.status(404).json({ 
-                error: "No E-Centre available in your area yet. Please try again later." 
-            });
+            return res.status(404).json({ error: "No E-Centre available in your area yet." });
         }
 
         // Find or create pool
-        const pool = await findOrCreatePool(pincode, eCentre._id);
+        const pool = await findOrCreatePool(pincode, eCentre.id);
 
-        // Create disposal request
-        const disposalRequest = await DisposalRequestModel.create({
-            userId: req.user._id,
-            eCentreId: eCentre._id,
-            poolId: pool._id,
-            items,
-            location: { address, pincode },
-            status: pool.currentCount > 0 ? "GROUPING" : "PENDING",
-            estimatedIncentive,
-            groupingProgress: {
-                current: pool.currentCount + 1,
-                target: pool.maxCapacity
-            }
-        });
+        // Create request
+        const { data: request, error } = await supabase
+            .from('disposal_requests')
+            .insert({
+                user_id: req.user._id,
+                ecentre_id: eCentre.id,
+                pool_id: pool.id,
+                items,
+                location_address: address,
+                location_pincode: pincode,
+                location_lat: coordinates?.lat || null,
+                location_lng: coordinates?.lng || null,
+                description,
+                image_url: imageUrl,
+                status: pool.current_count > 0 ? 'GROUPING' : 'PENDING',
+                estimated_incentive_min: estimatedIncentive.min,
+                estimated_incentive_max: estimatedIncentive.max,
+                grouping_current: pool.current_count + 1,
+                grouping_target: pool.max_capacity
+            })
+            .select()
+            .single();
 
-        // Add request to pool
-        pool.requestIds.push(disposalRequest._id);
-        pool.currentCount += 1;
-        await pool.save();
+        if (error) throw error;
+
+        // Update pool
+        const newRequestIds = [...(pool.request_ids || []), request.id];
+        await supabase
+            .from('pickup_pools')
+            .update({
+                request_ids: newRequestIds,
+                current_count: newRequestIds.length,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', pool.id);
 
         // Update pool summary
-        await updatePoolSummary(pool._id);
+        await updatePoolSummary(pool.id);
 
-        // Update all requests in pool with new grouping progress
-        await DisposalRequestModel.updateMany(
-            { poolId: pool._id },
-            { 
-                status: pool.currentCount >= 2 ? "GROUPING" : "PENDING",
-                groupingProgress: {
-                    current: pool.currentCount,
-                    target: pool.maxCapacity
-                }
-            }
-        );
+        // Update grouping progress for all requests in pool
+        if (newRequestIds.length > 1) {
+            await supabase
+                .from('disposal_requests')
+                .update({
+                    status: 'GROUPING',
+                    grouping_current: newRequestIds.length,
+                    updated_at: new Date().toISOString()
+                })
+                .in('id', newRequestIds);
+        }
+
+        // Add to user points
+        const { data: currentUser } = await supabase
+            .from('users')
+            .select('points')
+            .eq('id', req.user._id)
+            .single();
+
+        await supabase
+            .from('users')
+            .update({ points: (currentUser?.points || 0) + 10 })
+            .eq('id', req.user._id);
 
         res.status(201).json({
             success: true,
-            message: "Request sent to nearest E-Centre",
             data: {
-                requestId: disposalRequest._id,
+                ...request,
                 eCentreName: eCentre.name,
-                poolStatus: {
-                    current: pool.currentCount,
-                    target: pool.maxCapacity
-                },
-                status: disposalRequest.status,
-                estimatedIncentive
+                poolId: pool.id,
+                grouping: { current: newRequestIds.length, target: pool.max_capacity }
             }
         });
     } catch (error: any) {
@@ -145,139 +146,181 @@ export const createDisposalRequest = async (req: AuthRequest, res: Response) => 
 export const getUserRequests = async (req: AuthRequest, res: Response) => {
     try {
         if (req.user?.role !== "USER") {
-            return res.status(403).json({ error: "Access denied" });
+            return res.status(403).json({ error: "Only users can view their requests" });
         }
 
-        const requests = await DisposalRequestModel.find({ 
-            userId: req.user._id 
-        }).sort({ createdAt: -1 });
+        const { data: requests, error } = await supabase
+            .from('disposal_requests')
+            .select('*')
+            .eq('user_id', req.user._id)
+            .order('created_at', { ascending: false });
 
-        res.json({ success: true, data: requests });
+        if (error) throw error;
+
+        // Format for frontend compatibility
+        const formattedRequests = (requests || []).map(r => ({
+            _id: r.id,
+            userId: r.user_id,
+            eCentreId: r.ecentre_id,
+            poolId: r.pool_id,
+            items: r.items,
+            location: {
+                address: r.location_address,
+                pincode: r.location_pincode,
+                coordinates: r.location_lat ? { lat: r.location_lat, lng: r.location_lng } : undefined
+            },
+            imageUrl: r.image_url,
+            description: r.description,
+            status: r.status,
+            estimatedIncentive: { min: r.estimated_incentive_min, max: r.estimated_incentive_max },
+            actualIncentive: r.actual_incentive,
+            groupingProgress: { current: r.grouping_current, target: r.grouping_target },
+            createdAt: r.created_at,
+            updatedAt: r.updated_at
+        }));
+
+        res.json({ success: true, data: formattedRequests });
     } catch (error: any) {
-        res.status(400).json({ success: false, error: error.message });
+        console.error("Get user requests error:", error);
+        res.status(500).json({ error: "Failed to fetch requests" });
     }
 };
 
-// Get Single Disposal Request (with privacy checks)
+// Get specific disposal request
 export const getDisposalRequest = async (req: AuthRequest, res: Response) => {
     try {
         const { id } = req.params;
 
-        const request = await DisposalRequestModel.findById(id);
+        const { data: request, error } = await supabase
+            .from('disposal_requests')
+            .select('*')
+            .eq('id', id)
+            .single();
 
-        if (!request) {
+        if (error || !request) {
             return res.status(404).json({ error: "Request not found" });
         }
 
-        // Privacy check: Users can only see their own requests
-        if (req.user?.role === "USER" && request.userId.toString() !== req.user._id) {
+        // Privacy check
+        if (req.user?.role === "USER" && request.user_id !== req.user._id) {
             return res.status(403).json({ error: "Access denied" });
-        }
-
-        // E-Centres can only see scheduled requests assigned to them
-        if (req.user?.role === "ECENTRE") {
-            if (!request.scheduledPickupId) {
-                return res.status(403).json({ error: "Request not yet scheduled" });
-            }
-
-            const pickup = await PickupModel.findById(request.scheduledPickupId);
-            if (!pickup || pickup.eCentreId.toString() !== req.user._id) {
-                return res.status(403).json({ error: "Access denied" });
-            }
         }
 
         res.json({ success: true, data: request });
     } catch (error: any) {
-        res.status(400).json({ success: false, error: error.message });
+        console.error("Get request error:", error);
+        res.status(500).json({ error: "Failed to fetch request" });
     }
 };
 
-// Update Disposal Request Status (E-Centre only)
-export const updateRequestStatus = async (req: AuthRequest, res: Response) => {
-    try {
-        if (req.user?.role !== "ECENTRE") {
-            return res.status(403).json({ error: "Only E-Centres can update request status" });
-        }
-
-        const { id } = req.params;
-        const { status, actualIncentive } = req.body;
-
-        const request = await DisposalRequestModel.findById(id);
-
-        if (!request) {
-            return res.status(404).json({ error: "Request not found" });
-        }
-
-        // Verify E-Centre has access to this request
-        if (request.scheduledPickupId) {
-            const pickup = await PickupModel.findById(request.scheduledPickupId);
-            if (!pickup || pickup.eCentreId.toString() !== req.user._id) {
-                return res.status(403).json({ error: "Access denied" });
-            }
-        }
-
-        // Update request
-        request.status = status;
-        if (actualIncentive !== undefined) {
-            request.actualIncentive = actualIncentive;
-        }
-        request.updatedAt = new Date();
-
-        await request.save();
-
-        res.json({ success: true, data: request });
-    } catch (error: any) {
-        res.status(400).json({ success: false, error: error.message });
-    }
-};
-
-// Get Grouping Status for Area (USER only)
-export const getGroupingStatus = async (req: AuthRequest, res: Response) => {
-    try {
-        if (req.user?.role !== "USER") {
-            return res.status(403).json({ error: "Access denied" });
-        }
-
-        const { pincode } = req.params;
-
-        if (!pincode || typeof pincode !== "string") {
-            return res.status(400).json({ error: "Valid pincode is required" });
-        }
-
-        const groupingInfo = await checkGroupingOpportunity(pincode);
-
-        res.json({ success: true, data: groupingInfo });
-    } catch (error: any) {
-        res.status(400).json({ success: false, error: error.message });
-    }
-};
-
-
-// Get All Disposal Requests (E-Centre only)
+// Get All Requests (E-Centre only)
 export const getAllRequests = async (req: AuthRequest, res: Response) => {
     try {
         if (req.user?.role !== "ECENTRE") {
-            return res.status(403).json({ 
-                success: false,
-                error: "Only E-Centres can view all requests" 
-            });
+            return res.status(403).json({ success: false, error: "Only E-Centres can view all requests" });
         }
 
-        // In a real app, filter by E-Centre's service areas
-        // For now, return all requests
-        const requests = await DisposalRequestModel.find({})
-            .sort({ createdAt: -1 })
+        // Return requests assigned to this E-Centre
+        const { data: requests, error } = await supabase
+            .from('disposal_requests')
+            .select('*')
+            .eq('ecentre_id', req.user._id)
+            .order('created_at', { ascending: false })
             .limit(100);
 
-        res.json({ 
-            success: true, 
-            data: requests 
-        });
+        if (error) throw error;
+
+        // Format for frontend
+        const formattedRequests = (requests || []).map(r => ({
+            _id: r.id,
+            userId: r.user_id,
+            eCentreId: r.ecentre_id,
+            poolId: r.pool_id,
+            items: r.items,
+            location: {
+                address: r.location_address,
+                pincode: r.location_pincode,
+                coordinates: r.location_lat ? { lat: r.location_lat, lng: r.location_lng } : undefined
+            },
+            status: r.status,
+            estimatedIncentive: { min: r.estimated_incentive_min, max: r.estimated_incentive_max },
+            groupingProgress: { current: r.grouping_current, target: r.grouping_target },
+            createdAt: r.created_at,
+            updatedAt: r.updated_at
+        }));
+
+        res.json({ success: true, data: formattedRequests });
     } catch (error: any) {
         console.error("Get all requests error:", error);
-        res.status(500).json({ 
-            success: false,
-            error: "Failed to fetch requests" 
+        res.status(500).json({ success: false, error: "Failed to fetch requests" });
+    }
+};
+
+// Get Reports by E-Centre
+export const getReportsByECentre = async (req: AuthRequest, res: Response) => {
+    try {
+        if (req.user?.role !== "ECENTRE") {
+            return res.status(403).json({ success: false, error: "Only E-Centres can view their reports" });
+        }
+
+        const { eCentreId } = req.params;
+        if (eCentreId !== req.user._id) {
+            return res.status(403).json({ success: false, error: "You can only view your own reports" });
+        }
+
+        const { data: requests, error } = await supabase
+            .from('disposal_requests')
+            .select('*')
+            .eq('ecentre_id', eCentreId)
+            .order('created_at', { ascending: false })
+            .limit(100);
+
+        if (error) throw error;
+
+        res.json({ success: true, data: requests || [] });
+    } catch (error: any) {
+        console.error("Get reports by E-Centre error:", error);
+        res.status(500).json({ success: false, error: "Failed to fetch reports" });
+    }
+};
+
+// Get Reports by Location
+export const getReportsByLocation = async (req: AuthRequest, res: Response) => {
+    try {
+        const { lat, lng, radius } = req.query;
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, error: "lat and lng are required" });
+        }
+
+        const userLat = parseFloat(lat as string);
+        const userLng = parseFloat(lng as string);
+        const searchRadius = parseFloat(radius as string) || 10;
+
+        const { data: allRequests } = await supabase
+            .from('disposal_requests')
+            .select('*')
+            .not('location_lat', 'is', null)
+            .not('location_lng', 'is', null)
+            .order('created_at', { ascending: false });
+
+        const haversine = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLng = (lng2 - lng1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) ** 2 +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLng / 2) ** 2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        };
+
+        const nearby = (allRequests || []).filter(r => {
+            if (!r.location_lat || !r.location_lng) return false;
+            return haversine(userLat, userLng, r.location_lat, r.location_lng) <= searchRadius;
         });
+
+        res.json({ success: true, data: nearby });
+    } catch (error: any) {
+        console.error("Get reports by location error:", error);
+        res.status(500).json({ success: false, error: "Failed to fetch reports" });
     }
 };

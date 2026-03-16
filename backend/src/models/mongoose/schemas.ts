@@ -13,6 +13,11 @@ export interface IUser extends Document {
         pincode?: string;
         coordinates?: { lat: number; lng: number };
     };
+    lastKnownLocation?: {
+        lat: number;
+        lng: number;
+        updatedAt: Date;
+    };
     phoneNumber?: string;
     pickupHistory: mongoose.Types.ObjectId[];
     createdAt: Date;
@@ -34,6 +39,8 @@ export interface IECentre extends Document {
     capacity: number;
     completedPickups: number;
     rating: number;
+    operationalStatus: "ACTIVE" | "INACTIVE" | "MAINTENANCE";
+    serviceRadius: number; // km
     createdAt: Date;
     updatedAt: Date;
 }
@@ -52,6 +59,8 @@ export interface IDisposalRequest extends Document {
         pincode: string;
         coordinates?: { lat: number; lng: number };
     };
+    imageUrl?: string;
+    description?: string;
     status: "PENDING" | "GROUPING" | "ACCEPTED" | "SCHEDULED" | "COLLECTED";
     estimatedIncentive: { min: number; max: number };
     actualIncentive?: number;
@@ -131,6 +140,11 @@ const UserSchema = new Schema<IUser>({
             lng: { type: Number }
         }
     },
+    lastKnownLocation: {
+        lat: { type: Number },
+        lng: { type: Number },
+        updatedAt: { type: Date }
+    },
     phoneNumber: { type: String },
     pickupHistory: [{ type: Schema.Types.ObjectId, ref: "DisposalRequest" }],
     createdAt: { type: Date, default: Date.now },
@@ -184,6 +198,12 @@ const ECentreSchema = new Schema<IECentre>({
     capacity: { type: Number, default: 100 },
     completedPickups: { type: Number, default: 0 },
     rating: { type: Number, default: 5.0, min: 0, max: 5 },
+    operationalStatus: {
+        type: String,
+        enum: ["ACTIVE", "INACTIVE", "MAINTENANCE"],
+        default: "ACTIVE"
+    },
+    serviceRadius: { type: Number, default: 10 }, // km
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 }, {
@@ -216,6 +236,8 @@ const DisposalRequestSchema = new Schema<IDisposalRequest>({
             lng: { type: Number }
         }
     },
+    imageUrl: { type: String },
+    description: { type: String },
     status: { 
         type: String, 
         enum: ["PENDING", "GROUPING", "ACCEPTED", "SCHEDULED", "COLLECTED"], 

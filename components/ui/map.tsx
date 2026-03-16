@@ -20,6 +20,13 @@ const greenIcon = L.icon({
     iconAnchor: [12, 41],
 });
 
+const blueIcon = L.icon({
+    iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+});
+
 interface MapProps {
     userLocation?: { lat: number; lng: number };
     eCentres?: Array<{
@@ -73,15 +80,15 @@ export default function Map({ userLocation, eCentres }: MapProps) {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
             
-            {/* User Location Marker */}
+            {/* User Location Marker (Blue) */}
             {userLocation && 
              typeof userLocation.lat === 'number' && 
              typeof userLocation.lng === 'number' &&
              !isNaN(userLocation.lat) &&
              !isNaN(userLocation.lng) && (
-                <Marker position={[userLocation.lat, userLocation.lng]} icon={icon}>
+                <Marker position={[userLocation.lat, userLocation.lng]} icon={blueIcon}>
                     <Popup>
-                        <strong>Your Location</strong>
+                        <strong>📍 Your Location</strong>
                     </Popup>
                 </Marker>
             )}

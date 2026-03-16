@@ -1,368 +1,192 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth.middleware";
-import { DisposalRequestModel, PickupPoolModel, ECentreModel, PickupModel, UserModel } from "../models/mongoose/schemas";
-import mongoose from "mongoose";
+import { supabase } from "../config/supabase";
 
-// Find nearest E-Centre for a given pincode
-const findNearestECentre = async (pincode: string) => {
-    // First, try to find E-Centre that services this pincode
-    let eCentre = await ECentreModel.findOne({
-        serviceAreas: pincode,
-        verified: true
-    }).sort({ completedPickups: -1 }); // Prefer experienced centres
-
-    // If no E-Centre services this pincode, find any verified E-Centre
-    if (!eCentre) {
-        eCentre = await ECentreModel.findOne({
-            verified: true
-        }).sort({ completedPickups: -1 });
-    }
-
-    return eCentre;
+// Haversine formula
+const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-// Find or create pool for a pincode and E-Centre
-const findOrCreatePool = async (pincode: string, eCentreId: mongoose.Types.ObjectId) => {
-    // Look for an OPEN pool in this area
-    let pool = await PickupPoolModel.findOne({
-        eCentreId,
-        area: pincode,
-        status: "OPEN",
-        currentCount: { $lt: 5 } // Not full
-    });
+// Find nearest E-Centre
+export const findNearestECentre = async (pincode: string, coordinates?: { lat: number; lng: number }) => {
+    if (coordinates && coordinates.lat && coordinates.lng) {
+        const { data: eCentres } = await supabase
+            .from('ecentres')
+            .select('*')
+            .neq('operational_status', 'INACTIVE');
 
-    // If no pool exists, create one
-    if (!pool) {
-        pool = await PickupPoolModel.create({
-            eCentreId,
+        if (!eCentres || eCentres.length === 0) return null;
+
+        let nearest: any = null;
+        let minDist = Infinity;
+
+        // First pass: within service radius
+        for (const ec of eCentres) {
+            if (ec.location_lat && ec.location_lng) {
+                const dist = haversineDistance(coordinates.lat, coordinates.lng, ec.location_lat, ec.location_lng);
+                const maxRadius = ec.service_radius || 10;
+                if (dist <= maxRadius && dist < minDist) {
+                    minDist = dist;
+                    nearest = ec;
+                }
+            }
+        }
+        if (nearest) return nearest;
+
+        // Fallback: absolute nearest
+        for (const ec of eCentres) {
+            if (ec.location_lat && ec.location_lng) {
+                const dist = haversineDistance(coordinates.lat, coordinates.lng, ec.location_lat, ec.location_lng);
+                if (dist < minDist) {
+                    minDist = dist;
+                    nearest = ec;
+                }
+            }
+        }
+        return nearest;
+    }
+
+    // Fallback: pincode match
+    const { data: byPincode } = await supabase
+        .from('ecentres')
+        .select('*')
+        .contains('service_areas', [pincode])
+        .neq('operational_status', 'INACTIVE')
+        .order('completed_pickups', { ascending: false })
+        .limit(1);
+
+    if (byPincode && byPincode.length > 0) return byPincode[0];
+
+    const { data: any } = await supabase
+        .from('ecentres')
+        .select('*')
+        .neq('operational_status', 'INACTIVE')
+        .order('completed_pickups', { ascending: false })
+        .limit(1);
+
+    return any && any.length > 0 ? any[0] : null;
+};
+
+// Find or create pool
+export const findOrCreatePool = async (pincode: string, eCentreId: string) => {
+    // Look for existing open pool
+    const { data: existingPool } = await supabase
+        .from('pickup_pools')
+        .select('*')
+        .eq('area', pincode)
+        .eq('ecentre_id', eCentreId)
+        .eq('status', 'OPEN')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+    if (existingPool && existingPool.current_count < existingPool.max_capacity) {
+        return existingPool;
+    }
+
+    // Create new pool
+    const { data: newPool, error } = await supabase
+        .from('pickup_pools')
+        .insert({
+            ecentre_id: eCentreId,
             area: pincode,
-            requestIds: [],
-            maxCapacity: 5,
-            currentCount: 0,
-            status: "OPEN",
-            itemsSummary: []
-        });
-    }
+            max_capacity: 5,
+            current_count: 0,
+            status: 'OPEN',
+            items_summary: []
+        })
+        .select()
+        .single();
 
-    return pool;
+    if (error) throw error;
+    return newPool;
 };
 
-// Update pool items summary
-const updatePoolSummary = async (poolId: mongoose.Types.ObjectId) => {
-    const pool = await PickupPoolModel.findById(poolId).populate('requestIds');
+// Update pool summary
+export const updatePoolSummary = async (poolId: string) => {
+    const { data: pool } = await supabase
+        .from('pickup_pools')
+        .select('*')
+        .eq('id', poolId)
+        .single();
+
     if (!pool) return;
 
-    const itemsMap: { [key: string]: number } = {};
-    
-    for (const requestId of pool.requestIds) {
-        const request = await DisposalRequestModel.findById(requestId);
-        if (request) {
-            request.items.forEach(item => {
-                itemsMap[item.type] = (itemsMap[item.type] || 0) + item.quantity;
-            });
+    const requestIds = pool.request_ids || [];
+    if (requestIds.length === 0) return;
+
+    const { data: requests } = await supabase
+        .from('disposal_requests')
+        .select('items')
+        .in('id', requestIds);
+
+    if (!requests) return;
+
+    const summary: { [key: string]: number } = {};
+    for (const req of requests) {
+        const items = req.items as any[];
+        for (const item of items) {
+            summary[item.type] = (summary[item.type] || 0) + item.quantity;
         }
     }
 
-    const itemsSummary = Object.entries(itemsMap).map(([type, quantity]) => ({
-        type,
-        quantity
-    }));
+    const itemsSummary = Object.entries(summary).map(([type, quantity]) => ({ type, quantity }));
 
-    pool.itemsSummary = itemsSummary;
-    await pool.save();
-};
-
-// Get E-Centre's Pools
-export const getMyPools = async (req: AuthRequest, res: Response) => {
-    try {
-        if (req.user?.role !== "ECENTRE") {
-            return res.status(403).json({ 
-                success: false,
-                error: "Only E-Centres can view pools" 
-            });
-        }
-
-        const pools = await PickupPoolModel.find({
-            eCentreId: req.user._id
+    await supabase
+        .from('pickup_pools')
+        .update({
+            items_summary: itemsSummary,
+            updated_at: new Date().toISOString()
         })
-        .populate('requestIds')
-        .sort({ createdAt: -1 });
-
-        // Group by status
-        const openPools = pools.filter(p => p.status === "OPEN");
-        const acceptedPools = pools.filter(p => p.status === "ACCEPTED");
-        const scheduledPools = pools.filter(p => p.status === "SCHEDULED");
-        const collectedPools = pools.filter(p => p.status === "COLLECTED");
-
-        res.json({ 
-            success: true, 
-            data: {
-                openPools,
-                acceptedPools,
-                scheduledPools,
-                collectedPools
-            }
-        });
-    } catch (error: any) {
-        console.error("Get pools error:", error);
-        res.status(500).json({ 
-            success: false,
-            error: "Failed to fetch pools" 
-        });
-    }
+        .eq('id', poolId);
 };
 
-// Accept a Pool
+// Accept Pool (E-Centre)
 export const acceptPool = async (req: AuthRequest, res: Response) => {
     try {
         if (req.user?.role !== "ECENTRE") {
-            return res.status(403).json({ 
-                success: false,
-                error: "Only E-Centres can accept pools" 
-            });
+            return res.status(403).json({ error: "Only E-Centres can accept pools" });
         }
 
         const { poolId } = req.params;
 
-        const pool = await PickupPoolModel.findById(poolId);
-        if (!pool) {
-            return res.status(404).json({ 
-                success: false,
-                error: "Pool not found" 
-            });
+        const { data: pool, error } = await supabase
+            .from('pickup_pools')
+            .select('*')
+            .eq('id', poolId)
+            .single();
+
+        if (error || !pool) {
+            return res.status(404).json({ error: "Pool not found" });
         }
 
-        // Verify pool belongs to this E-Centre
-        if (pool.eCentreId.toString() !== req.user._id) {
-            return res.status(403).json({ 
-                success: false,
-                error: "You can only accept your own pools" 
-            });
-        }
-
-        // Verify pool is OPEN
-        if (pool.status !== "OPEN") {
-            return res.status(400).json({ 
-                success: false,
-                error: `Pool is already ${pool.status}` 
-            });
+        if (pool.ecentre_id !== req.user._id) {
+            return res.status(403).json({ error: "Not authorized for this pool" });
         }
 
         // Update pool status
-        pool.status = "ACCEPTED";
-        await pool.save();
+        await supabase
+            .from('pickup_pools')
+            .update({ status: 'ACCEPTED', updated_at: new Date().toISOString() })
+            .eq('id', poolId);
 
-        // Update all requests in pool
-        await DisposalRequestModel.updateMany(
-            { _id: { $in: pool.requestIds } },
-            { status: "ACCEPTED" }
-        );
+        // Update all requests in the pool
+        if (pool.request_ids && pool.request_ids.length > 0) {
+            await supabase
+                .from('disposal_requests')
+                .update({ status: 'ACCEPTED', updated_at: new Date().toISOString() })
+                .in('id', pool.request_ids);
+        }
 
-        res.json({ 
-            success: true, 
-            message: "Pool accepted successfully",
-            data: {
-                poolId: pool._id,
-                requestCount: pool.currentCount,
-                status: pool.status
-            }
-        });
+        res.json({ success: true, message: "Pool accepted" });
     } catch (error: any) {
         console.error("Accept pool error:", error);
-        res.status(500).json({ 
-            success: false,
-            error: "Failed to accept pool" 
-        });
+        res.status(500).json({ error: "Failed to accept pool" });
     }
 };
-
-// Schedule Pickup for Pool
-export const schedulePool = async (req: AuthRequest, res: Response) => {
-    try {
-        if (req.user?.role !== "ECENTRE") {
-            return res.status(403).json({ 
-                success: false,
-                error: "Only E-Centres can schedule pickups" 
-            });
-        }
-
-        const { poolId } = req.params;
-        const { scheduledDate, timeWindow } = req.body;
-
-        if (!scheduledDate || !timeWindow) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Scheduled date and time window are required" 
-            });
-        }
-
-        const pool = await PickupPoolModel.findById(poolId);
-        if (!pool) {
-            return res.status(404).json({ 
-                success: false,
-                error: "Pool not found" 
-            });
-        }
-
-        // Verify pool belongs to this E-Centre
-        if (pool.eCentreId.toString() !== req.user._id) {
-            return res.status(403).json({ 
-                success: false,
-                error: "You can only schedule your own pools" 
-            });
-        }
-
-        // Verify pool is ACCEPTED
-        if (pool.status !== "ACCEPTED") {
-            return res.status(400).json({ 
-                success: false,
-                error: `Pool must be ACCEPTED before scheduling (current: ${pool.status})` 
-            });
-        }
-
-        // Create Pickup document
-        const pickup = await PickupModel.create({
-            eCentreId: pool.eCentreId,
-            requestIds: pool.requestIds,
-            area: {
-                pincode: pool.area,
-                coordinates: { lat: 0, lng: 0 }, // TODO: Calculate from requests
-                radius: 2
-            },
-            status: "SCHEDULED",
-            scheduledDate: new Date(scheduledDate),
-            scheduledTimeWindow: timeWindow,
-            vehicleType: pool.currentCount <= 3 ? "TWO_WHEELER" : "SMALL_VEHICLE",
-            itemsSummary: pool.itemsSummary,
-            householdCount: pool.currentCount
-        });
-
-        // Update pool status
-        pool.status = "SCHEDULED";
-        await pool.save();
-
-        // Update all requests in pool
-        await DisposalRequestModel.updateMany(
-            { _id: { $in: pool.requestIds } },
-            { 
-                status: "SCHEDULED",
-                scheduledPickupId: pickup._id
-            }
-        );
-
-        res.json({ 
-            success: true, 
-            message: "Pickup scheduled successfully",
-            data: {
-                poolId: pool._id,
-                pickupId: pickup._id,
-                scheduledDate,
-                timeWindow,
-                requestCount: pool.currentCount
-            }
-        });
-    } catch (error: any) {
-        console.error("Schedule pool error:", error);
-        res.status(500).json({ 
-            success: false,
-            error: "Failed to schedule pickup" 
-        });
-    }
-};
-
-// Complete Pickup (Mark as Collected)
-export const completePool = async (req: AuthRequest, res: Response) => {
-    try {
-        if (req.user?.role !== "ECENTRE") {
-            return res.status(403).json({ 
-                success: false,
-                error: "Only E-Centres can complete pickups" 
-            });
-        }
-
-        const { poolId } = req.params;
-
-        const pool = await PickupPoolModel.findById(poolId);
-        if (!pool) {
-            return res.status(404).json({ 
-                success: false,
-                error: "Pool not found" 
-            });
-        }
-
-        // Verify pool belongs to this E-Centre
-        if (pool.eCentreId.toString() !== req.user._id) {
-            return res.status(403).json({ 
-                success: false,
-                error: "You can only complete your own pools" 
-            });
-        }
-
-        // Verify pool is SCHEDULED
-        if (pool.status !== "SCHEDULED") {
-            return res.status(400).json({ 
-                success: false,
-                error: `Pool must be SCHEDULED before completing (current: ${pool.status})` 
-            });
-        }
-
-        // Update pool status
-        pool.status = "COLLECTED";
-        await pool.save();
-
-        // Update all requests and award points
-        const requests = await DisposalRequestModel.find({ _id: { $in: pool.requestIds } });
-        
-        for (const request of requests) {
-            request.status = "COLLECTED";
-            
-            // Calculate actual incentive (use average of estimate)
-            const avgIncentive = Math.floor((request.estimatedIncentive.min + request.estimatedIncentive.max) / 2);
-            request.actualIncentive = avgIncentive;
-            await request.save();
-
-            // Award points to user
-            await UserModel.findByIdAndUpdate(
-                request.userId,
-                { 
-                    $inc: { points: avgIncentive },
-                    $push: { pickupHistory: request._id }
-                }
-            );
-        }
-
-        // Update E-Centre stats
-        await ECentreModel.findByIdAndUpdate(
-            pool.eCentreId,
-            { $inc: { completedPickups: 1 } }
-        );
-
-        // Update Pickup document
-        await PickupModel.findOneAndUpdate(
-            { requestIds: { $in: pool.requestIds } },
-            { 
-                status: "COMPLETED",
-                completedAt: new Date()
-            }
-        );
-
-        res.json({ 
-            success: true, 
-            message: "Pickup completed successfully",
-            data: {
-                poolId: pool._id,
-                requestCount: pool.currentCount,
-                pointsAwarded: requests.reduce((sum, r) => sum + (r.actualIncentive || 0), 0)
-            }
-        });
-    } catch (error: any) {
-        console.error("Complete pool error:", error);
-        res.status(500).json({ 
-            success: false,
-            error: "Failed to complete pickup" 
-        });
-    }
-};
-
-// Export helper functions for use in disposal controller
-export { findNearestECentre, findOrCreatePool, updatePoolSummary };

@@ -39,7 +39,7 @@ export default function UserDashboard() {
             address: place.address, 
             pincode: place.pincode 
         }))
-        generateNearbyECentres(place.lat, place.lng)
+        fetchNearbyECentres(place.lat, place.lng)
         setIsLocationModalOpen(false)
     }
 
@@ -54,31 +54,20 @@ export default function UserDashboard() {
     // Fake E-centres data based on user location
     const [nearbyECentres, setNearbyECentres] = useState<any[]>([])
 
-    // Generate fake E-centres near user location
-    const generateNearbyECentres = (lat: number, lng: number) => {
-        const centres = [
-            {
-                name: "Green Tech Recyclers",
-                distance: "2.1 km",
-                coordinates: { lat: lat + 0.015, lng: lng + 0.010 }
-            },
-            {
-                name: "Eco Waste Solutions",
-                distance: "3.5 km",
-                coordinates: { lat: lat - 0.020, lng: lng + 0.025 }
-            },
-            {
-                name: "Clean Earth E-Waste",
-                distance: "4.8 km",
-                coordinates: { lat: lat + 0.030, lng: lng - 0.015 }
-            },
-            {
-                name: "Sustainable Recycling Hub",
-                distance: "5.2 km",
-                coordinates: { lat: lat - 0.025, lng: lng - 0.020 }
-            }
-        ]
-        setNearbyECentres(centres)
+    // Fetch real nearby E-Centres from API
+    const fetchNearbyECentres = async (lat: number, lng: number) => {
+        try {
+            const res = await api.get(`/ecentres/nearby-coords?lat=${lat}&lng=${lng}`)
+            const centres = (res.data.data || []).map((c: any) => ({
+                name: c.name,
+                distance: c.distanceDisplay || `${c.distance} km`,
+                coordinates: c.location?.coordinates || { lat: 0, lng: 0 }
+            }))
+            setNearbyECentres(centres)
+        } catch (err) {
+            console.error("Failed to fetch nearby E-Centres:", err)
+            setNearbyECentres([])
+        }
     }
 
     useEffect(() => {
@@ -100,9 +89,30 @@ export default function UserDashboard() {
             const coords = (user.location as any)?.coordinates;
             if (coords && coords.lat && coords.lng) {
                 setUserLocation({ lat: coords.lat, lng: coords.lng });
-                generateNearbyECentres(coords.lat, coords.lng);
+                fetchNearbyECentres(coords.lat, coords.lng);
             }
         }
+
+        // Auto-detect browser geolocation
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+                    setUserLocation({ lat: latitude, lng: longitude });
+                    fetchNearbyECentres(latitude, longitude);
+                    // Update lastKnownLocation on the server
+                    api.patch("/auth/update-location", {
+                        lat: latitude,
+                        lng: longitude
+                    }).catch(() => {}) // Silent fail
+                },
+                (error) => {
+                    console.log("Geolocation not available:", error.message);
+                },
+                { enableHighAccuracy: true, timeout: 10000 }
+            );
+        }
+
         fetchData()
     }, [isAuthenticated, user])
 
@@ -129,7 +139,8 @@ export default function UserDashboard() {
             await api.post("/disposal/request", {
                 items: [{ type: formData.type, quantity: Number(formData.quantity) }],
                 address: formData.address,
-                pincode: formData.pincode
+                pincode: formData.pincode,
+                coordinates: userLocation || undefined
             })
             setIsModalOpen(false)
             fetchData() // Refresh
@@ -190,7 +201,7 @@ export default function UserDashboard() {
             setUserLocation({ lat: selectedLocation.lat, lng: selectedLocation.lng })
             setLocationAddress(selectedLocation.address)
             setFormData(prev => ({ ...prev, address: selectedLocation.fullAddress, pincode: selectedLocation.pincode }))
-            generateNearbyECentres(selectedLocation.lat, selectedLocation.lng)
+            fetchNearbyECentres(selectedLocation.lat, selectedLocation.lng)
             setIsLocationModalOpen(false)
         }
     }

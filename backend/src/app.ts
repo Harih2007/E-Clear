@@ -11,8 +11,12 @@ app.use((req, res, next) => {
     next();
 });
 
+const corsOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(",").map(s => s.trim())
+    : ["http://localhost:4000", "http://localhost:3000"];
+
 app.use(cors({
-    origin: ["http://localhost:4000", "http://localhost:3000"],
+    origin: corsOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']

@@ -1,15 +1,16 @@
 import { Request, Response } from "express";
-import { UserModel, ECentreModel } from "../models/mongoose/schemas";
+import { supabase } from "../config/supabase";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import mongoose from "mongoose";
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey_change_me_in_prod";
+const getJwtSecret = (): string => {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+        throw new Error("FATAL: JWT_SECRET environment variable is not set!");
+    }
+    return secret;
+};
 const JWT_EXPIRES_IN = "7d";
-
-// Check if MongoDB is connected
-const isMongoConnected = () => mongoose.connection.readyState === 1;
 
 // Validate email format
 const isValidEmail = (email: string): boolean => {
@@ -22,56 +23,28 @@ export const registerUser = async (req: Request, res: Response) => {
     try {
         const { name, email, password, phoneNumber, address, pincode } = req.body;
 
-        // Validate required fields
         if (!name || !email || !password) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Name, email, and password are required" 
-            });
+            return res.status(400).json({ success: false, error: "Name, email, and password are required" });
         }
-
-        // Validate name length
         if (name.trim().length < 2) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Name must be at least 2 characters long" 
-            });
+            return res.status(400).json({ success: false, error: "Name must be at least 2 characters long" });
         }
-
-        // Validate email format
         if (!isValidEmail(email)) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Please enter a valid email address" 
-            });
+            return res.status(400).json({ success: false, error: "Please enter a valid email address" });
         }
-
-        // Validate password length
         if (password.length < 8) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Password must be at least 8 characters long" 
-            });
+            return res.status(400).json({ success: false, error: "Password must be at least 8 characters long" });
         }
 
-        // Check MongoDB connection
-        if (!isMongoConnected()) {
-            return res.status(503).json({ 
-                success: false,
-                error: "Database connection unavailable. Please try again later." 
-            });
-        }
+        // Check if user exists
+        const { data: existing } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', email.toLowerCase().trim())
+            .single();
 
-        // Check if user already exists
-        const existingUser = await UserModel.findOne({ 
-            email: email.toLowerCase().trim() 
-        });
-        
-        if (existingUser) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Email already exists" 
-            });
+        if (existing) {
+            return res.status(400).json({ success: false, error: "Email already exists" });
         }
 
         // Hash password
@@ -79,199 +52,128 @@ export const registerUser = async (req: Request, res: Response) => {
         const hashedPassword = await bcrypt.hash(password, salt);
 
         // Create user
-        const user = await UserModel.create({
-            name: name.trim(),
-            email: email.toLowerCase().trim(),
-            password: hashedPassword,
-            role: "USER",
-            phoneNumber: phoneNumber || undefined,
-            location: { 
-                address: address || "", 
-                pincode: pincode || "" 
-            },
-            points: 0,
-            pickupHistory: []
-        });
+        const { data: user, error } = await supabase
+            .from('users')
+            .insert({
+                name: name.trim(),
+                email: email.toLowerCase().trim(),
+                password: hashedPassword,
+                role: "USER",
+                phone_number: phoneNumber || null,
+                location_address: address || "",
+                location_pincode: pincode || "",
+                points: 0
+            })
+            .select()
+            .single();
 
-        // Create JWT token
+        if (error) {
+            if (error.code === '23505') {
+                return res.status(400).json({ success: false, error: "Email already exists" });
+            }
+            throw error;
+        }
+
         const token = jwt.sign(
-            { 
-                _id: user._id.toString(), 
-                role: user.role,
-                email: user.email
-            }, 
-            JWT_SECRET,
+            { _id: user.id, role: user.role, email: user.email },
+            getJwtSecret(),
             { expiresIn: JWT_EXPIRES_IN }
         );
 
-        // Return success response
-        res.status(201).json({ 
-            success: true, 
-            token, 
-            user: { 
-                _id: user._id, 
-                name: user.name, 
+        res.status(201).json({
+            success: true,
+            token,
+            user: {
+                _id: user.id,
+                name: user.name,
                 email: user.email,
                 role: user.role,
                 points: user.points,
-                location: user.location
-            } 
+                location: { address: user.location_address, pincode: user.location_pincode }
+            }
         });
     } catch (error: any) {
         console.error("Registration error:", error);
-        
-        // Handle duplicate key error
-        if (error.code === 11000) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Email already exists" 
-            });
-        }
-        
-        // Handle validation errors
-        if (error.name === "ValidationError") {
-            const messages = Object.values(error.errors).map((err: any) => err.message);
-            return res.status(400).json({ 
-                success: false,
-                error: messages[0] || "Validation failed" 
-            });
-        }
-        
-        res.status(500).json({ 
-            success: false, 
-            error: "Registration failed. Please try again." 
-        });
+        res.status(500).json({ success: false, error: "Registration failed. Please try again." });
     }
 };
 
 // E-Centre Registration
 export const registerECentre = async (req: Request, res: Response) => {
     try {
-        const { 
-            name, 
-            email, 
-            password, 
-            phoneNumber, 
-            address, 
-            coordinates,
-            licenseNumber,
-            serviceAreas 
-        } = req.body;
+        const { name, email, password, phoneNumber, address, coordinates, licenseNumber, serviceAreas } = req.body;
 
-        // Validate required fields
         if (!name || !email || !password || !phoneNumber || !address || !licenseNumber) {
-            return res.status(400).json({ 
-                success: false,
-                error: "All fields are required (name, email, password, phone, address, license)" 
-            });
+            return res.status(400).json({ success: false, error: "All fields are required" });
         }
-
-        // Validate email format
         if (!isValidEmail(email)) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Please enter a valid email address" 
-            });
+            return res.status(400).json({ success: false, error: "Please enter a valid email address" });
         }
-
-        // Validate password length
         if (password.length < 8) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Password must be at least 8 characters long" 
-            });
+            return res.status(400).json({ success: false, error: "Password must be at least 8 characters long" });
         }
 
-        // Check MongoDB connection
-        if (!isMongoConnected()) {
-            return res.status(503).json({ 
-                success: false,
-                error: "Database connection unavailable. Please try again later." 
-            });
+        const { data: existing } = await supabase
+            .from('ecentres')
+            .select('id')
+            .eq('email', email.toLowerCase().trim())
+            .single();
+
+        if (existing) {
+            return res.status(400).json({ success: false, error: "Email already exists" });
         }
 
-        // Check if E-Centre already exists
-        const existingECentre = await ECentreModel.findOne({ 
-            email: email.toLowerCase().trim() 
-        });
-        
-        if (existingECentre) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Email already exists" 
-            });
-        }
-
-        // Hash password
         const salt = await bcrypt.genSalt(12);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Create E-Centre
-        const eCentre = await ECentreModel.create({
-            name: name.trim(),
-            email: email.toLowerCase().trim(),
-            password: hashedPassword,
-            phoneNumber,
-            location: {
-                address,
-                coordinates: coordinates || { lat: 0, lng: 0 }
-            },
-            licenseNumber,
-            serviceAreas: serviceAreas || [],
-            verified: false,
-            capacity: 100,
-            completedPickups: 0,
-            rating: 5.0
-        });
+        const { data: eCentre, error } = await supabase
+            .from('ecentres')
+            .insert({
+                name: name.trim(),
+                email: email.toLowerCase().trim(),
+                password: hashedPassword,
+                phone_number: phoneNumber,
+                location_address: address,
+                location_lat: coordinates?.lat || 0,
+                location_lng: coordinates?.lng || 0,
+                license_number: licenseNumber,
+                service_areas: serviceAreas || [],
+                verified: false,
+                capacity: 100,
+                completed_pickups: 0,
+                rating: 5.0
+            })
+            .select()
+            .single();
 
-        // Create JWT token
+        if (error) {
+            if (error.code === '23505') {
+                return res.status(400).json({ success: false, error: "Email already exists" });
+            }
+            throw error;
+        }
+
         const token = jwt.sign(
-            { 
-                _id: eCentre._id.toString(), 
-                role: "ECENTRE",
-                email: eCentre.email
-            }, 
-            JWT_SECRET,
+            { _id: eCentre.id, role: "ECENTRE", email: eCentre.email },
+            getJwtSecret(),
             { expiresIn: JWT_EXPIRES_IN }
         );
 
-        // Return success response
-        res.status(201).json({ 
-            success: true, 
-            token, 
-            user: { 
-                _id: eCentre._id, 
-                name: eCentre.name, 
+        res.status(201).json({
+            success: true,
+            token,
+            user: {
+                _id: eCentre.id,
+                name: eCentre.name,
                 email: eCentre.email,
                 role: "ECENTRE",
                 verified: eCentre.verified,
-                location: eCentre.location
-            } 
+                location: { address: eCentre.location_address, coordinates: { lat: eCentre.location_lat, lng: eCentre.location_lng } }
+            }
         });
     } catch (error: any) {
         console.error("E-Centre registration error:", error);
-        
-        // Handle duplicate key error
-        if (error.code === 11000) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Email already exists" 
-            });
-        }
-        
-        // Handle validation errors
-        if (error.name === "ValidationError") {
-            const messages = Object.values(error.errors).map((err: any) => err.message);
-            return res.status(400).json({ 
-                success: false,
-                error: messages[0] || "Validation failed" 
-            });
-        }
-        
-        res.status(500).json({ 
-            success: false, 
-            error: "Registration failed. Please try again." 
-        });
+        res.status(500).json({ success: false, error: "Registration failed. Please try again." });
     }
 };
 
@@ -282,116 +184,105 @@ export const login = async (req: Request, res: Response) => {
 
         console.log('🔐 Login attempt:', { email, role, hasPassword: !!password });
 
-        // Validate inputs
         if (!email || !password) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Email and password are required" 
-            });
+            return res.status(400).json({ success: false, error: "Email and password are required" });
         }
-
-        // Validate email format
         if (!isValidEmail(email)) {
-            return res.status(400).json({ 
-                success: false,
-                error: "Please enter a valid email address" 
-            });
-        }
-
-        // Check MongoDB connection
-        if (!isMongoConnected()) {
-            return res.status(503).json({ 
-                success: false,
-                error: "Database connection unavailable. Please try again later." 
-            });
+            return res.status(400).json({ success: false, error: "Please enter a valid email address" });
         }
 
         let user: any = null;
         let userRole: string = "USER";
 
-        // Search in User collection first
-        user = await UserModel.findOne({ 
-            email: email.toLowerCase().trim() 
-        }).select("+password");
-        
-        console.log('👤 User found:', !!user, user ? `Role: ${user.role}` : 'Not found');
-        
-        if (user) {
-            userRole = user.role;
+        // Search in Users table
+        const { data: foundUser } = await supabase
+            .from('users')
+            .select('*')
+            .eq('email', email.toLowerCase().trim())
+            .single();
+
+        if (foundUser) {
+            user = foundUser;
+            userRole = foundUser.role;
         } else {
-            // Try E-Centre collection
-            user = await ECentreModel.findOne({ 
-                email: email.toLowerCase().trim() 
-            }).select("+password");
-            
-            console.log('🏭 E-Centre found:', !!user);
-            
-            if (user) {
+            // Try E-Centres table
+            const { data: foundECentre } = await supabase
+                .from('ecentres')
+                .select('*')
+                .eq('email', email.toLowerCase().trim())
+                .single();
+
+            if (foundECentre) {
+                user = foundECentre;
                 userRole = "ECENTRE";
             }
         }
 
-        // User not found
         if (!user) {
-            console.log('❌ No user found with email:', email);
-            return res.status(401).json({ 
-                success: false,
-                message: "Invalid credentials" 
-            });
+            return res.status(401).json({ success: false, message: "Invalid credentials" });
         }
 
-        console.log('🔑 Comparing passwords...');
-        // Validate password
         const isPasswordValid = await bcrypt.compare(password, user.password);
-        
-        console.log('✅ Password valid:', isPasswordValid);
-        
         if (!isPasswordValid) {
-            return res.status(401).json({ 
-                success: false,
-                message: "Invalid credentials" 
-            });
+            return res.status(401).json({ success: false, message: "Invalid credentials" });
         }
 
-        // Check if role matches (if specified)
         if (role && userRole !== role) {
-            console.log('❌ Role mismatch. Expected:', role, 'Got:', userRole);
-            return res.status(403).json({ 
-                success: false,
-                message: "Invalid credentials for this role" 
-            });
+            return res.status(403).json({ success: false, message: "Invalid credentials for this role" });
         }
 
-        // Create JWT token
         const token = jwt.sign(
-            { 
-                _id: user._id.toString(), 
-                role: userRole,
-                email: user.email
-            }, 
-            JWT_SECRET,
+            { _id: user.id, role: userRole, email: user.email },
+            getJwtSecret(),
             { expiresIn: JWT_EXPIRES_IN }
         );
 
-        // Return success response
-        res.json({ 
-            success: true, 
-            token, 
-            user: { 
-                _id: user._id, 
-                name: user.name, 
+        res.json({
+            success: true,
+            token,
+            user: {
+                _id: user.id,
+                name: user.name,
                 email: user.email,
                 role: userRole,
                 points: user.points || 0,
-                location: user.location,
+                location: userRole === "ECENTRE"
+                    ? { address: user.location_address, coordinates: { lat: user.location_lat, lng: user.location_lng } }
+                    : { address: user.location_address, pincode: user.location_pincode },
                 verified: user.verified
-            } 
+            }
         });
     } catch (error: any) {
         console.error("Login error:", error);
-        res.status(500).json({ 
-            success: false, 
-            error: "Login failed. Please try again." 
-        });
+        res.status(500).json({ success: false, error: "Login failed. Please try again." });
+    }
+};
+
+// Update User Location
+export const updateLocation = async (req: Request, res: Response) => {
+    try {
+        const { lat, lng } = req.body;
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, error: "lat and lng are required" });
+        }
+
+        const authReq = req as any;
+        if (!authReq.user?._id) {
+            return res.status(401).json({ success: false, error: "Unauthorized" });
+        }
+
+        await supabase
+            .from('users')
+            .update({
+                last_known_lat: parseFloat(lat),
+                last_known_lng: parseFloat(lng),
+                last_known_location_updated_at: new Date().toISOString()
+            })
+            .eq('id', authReq.user._id);
+
+        res.json({ success: true, message: "Location updated" });
+    } catch (error: any) {
+        console.error("Update location error:", error);
+        res.status(500).json({ success: false, error: "Failed to update location" });
     }
 };

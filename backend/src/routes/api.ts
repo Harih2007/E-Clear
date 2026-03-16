@@ -3,7 +3,8 @@ import * as DisposalController from "../controllers/disposal.controller";
 import * as PickupController from "../controllers/pickup.controller";
 import * as PoolingController from "../controllers/pooling.controller";
 import * as AuthController from "../controllers/auth.controller";
-import { authenticate, isUser, isECentre, isUserOrAdmin, isECentreOrAdmin } from "../middleware/auth.middleware";
+import * as UploadController from "../controllers/upload.controller";
+import { authenticate, isUser, isECentre } from "../middleware/auth.middleware";
 
 const router = Router();
 
@@ -12,56 +13,61 @@ const router = Router();
 // ============================================
 
 // Auth Routes
-router.post("/auth/register", AuthController.registerUser); // User registration
-router.post("/auth/register/user", AuthController.registerUser); // Alias for clarity
+router.post("/auth/register", AuthController.registerUser);
+router.post("/auth/register/user", AuthController.registerUser);
 router.post("/auth/register/ecentre", AuthController.registerECentre);
 router.post("/auth/login", AuthController.login);
+router.patch("/auth/update-location", authenticate, AuthController.updateLocation);
 
 // ============================================
-// USER ROUTES (Household)
+// USER ROUTES
 // ============================================
 
 // Disposal Requests
 router.post("/disposal/request", authenticate, isUser, DisposalController.createDisposalRequest);
 router.get("/disposal/my-requests", authenticate, isUser, DisposalController.getUserRequests);
 router.get("/disposal/requests", authenticate, isECentre, DisposalController.getAllRequests);
-router.get("/disposal/grouping/:pincode", authenticate, isUser, DisposalController.getGroupingStatus);
 
-// View Nearby E-Centres
+// View Nearby E-Centres (pincode-based)
 router.get("/ecentres/nearby", authenticate, isUser, PickupController.getNearbyECentres);
 
+// Nearby E-Centres by coordinates
+router.get("/ecentres/nearby-coords", authenticate, PickupController.getNearbyECentresByCoords);
+
+// User Stats
+router.get("/stats/user", authenticate, isUser, PickupController.getUserStats);
+
 // ============================================
-// E-CENTRE ROUTES (Recycling Centers)
+// E-CENTRE ROUTES
 // ============================================
 
 // Pickup Management
-router.post("/pickup/create", authenticate, isECentre, PickupController.createPickup);
-router.get("/pickup/my-pickups", authenticate, isECentre, PickupController.getECentrePickups);
-router.get("/pickup/:id/details", authenticate, isECentre, PickupController.getPickupDetails);
-router.patch("/pickup/:id/status", authenticate, isECentre, PickupController.updatePickupStatus);
-router.post("/pickup/:id/confirm", authenticate, isECentre, PickupController.confirmPickupAndReleaseIncentives);
+router.post("/pickup/schedule", authenticate, isECentre, PickupController.schedulePickup);
+router.patch("/pickup/:requestId/collected", authenticate, isECentre, PickupController.markAsCollected);
 
-// View Available Clusters
-router.get("/pickup/clusters/available", authenticate, isECentre, PickupController.getAvailablePickupClusters);
+// E-Centre Stats
+router.get("/stats/ecentre", authenticate, isECentre, PickupController.getECentreStats);
 
-// Update Request Status (after pickup)
-router.patch("/disposal/:id/status", authenticate, isECentre, DisposalController.updateRequestStatus);
+// Pending Pools
+router.get("/pools/pending", authenticate, isECentre, PickupController.getPendingPools);
 
-// ============================================
-// POOLING SYSTEM
-// ============================================
-
-// E-Centre Pool Management
-router.get("/pools/my-pools", authenticate, isECentre, PoolingController.getMyPools);
+// Pool Management
 router.post("/pools/:poolId/accept", authenticate, isECentre, PoolingController.acceptPool);
-router.post("/pools/:poolId/schedule", authenticate, isECentre, PoolingController.schedulePool);
-router.post("/pools/:poolId/complete", authenticate, isECentre, PoolingController.completePool);
+
+// Reports by E-Centre
+router.get("/disposal/by-ecentre/:eCentreId", authenticate, isECentre, DisposalController.getReportsByECentre);
+
+// Reports by location radius
+router.get("/disposal/by-location", authenticate, DisposalController.getReportsByLocation);
 
 // ============================================
-// SHARED ROUTES (Both USER and E-CENTRE)
+// SHARED ROUTES
 // ============================================
 
-// View specific disposal request (with privacy checks)
+// View specific disposal request
 router.get("/disposal/:id", authenticate, DisposalController.getDisposalRequest);
+
+// Image Upload
+router.post("/upload/image", authenticate, UploadController.uploadImage);
 
 export default router;

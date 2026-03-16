@@ -65,3 +65,10 @@ logs/
 *.tmp
 *.temp
 .cache/
+
+# Backend build output
+backend/dist/
+backend/run-migration.js
+
+# Supabase local config
+.supabase/
