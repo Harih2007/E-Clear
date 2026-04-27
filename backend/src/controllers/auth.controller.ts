@@ -219,11 +219,20 @@ export const login = async (req: Request, res: Response) => {
         }
 
         if (!user) {
+            console.log('❌ User not found:', email);
             return res.status(401).json({ success: false, message: "Invalid credentials" });
         }
 
+        console.log('✅ User found:', { email: user.email, role: userRole, hasPassword: !!user.password });
+        console.log('🔍 Password from request:', password);
+        console.log('🔍 Password hash from DB (first 30 chars):', user.password.substring(0, 30));
+        console.log('🔍 Password hash length:', user.password.length);
+
         const isPasswordValid = await bcrypt.compare(password, user.password);
+        console.log('🔑 Password validation:', isPasswordValid);
+        
         if (!isPasswordValid) {
+            console.log('❌ Invalid password for:', email);
             return res.status(401).json({ success: false, message: "Invalid credentials" });
         }
 
@@ -246,6 +255,7 @@ export const login = async (req: Request, res: Response) => {
                 email: user.email,
                 role: userRole,
                 points: user.points || 0,
+                phoneNumber: user.phone_number || null,
                 location: userRole === "ECENTRE"
                     ? { address: user.location_address, coordinates: { lat: user.location_lat, lng: user.location_lng } }
                     : { address: user.location_address, pincode: user.location_pincode },
@@ -258,29 +268,60 @@ export const login = async (req: Request, res: Response) => {
     }
 };
 
-// Update User Location
+// Update User/E-Centre Location
 export const updateLocation = async (req: Request, res: Response) => {
     try {
-        const { lat, lng } = req.body;
-        if (!lat || !lng) {
-            return res.status(400).json({ success: false, error: "lat and lng are required" });
-        }
-
+        const { address, coordinates, lat, lng } = req.body;
+        
+        console.log('📍 Update location request:', { address, coordinates, lat, lng });
+        
         const authReq = req as any;
         if (!authReq.user?._id) {
             return res.status(401).json({ success: false, error: "Unauthorized" });
         }
 
-        await supabase
-            .from('users')
-            .update({
-                last_known_lat: parseFloat(lat),
-                last_known_lng: parseFloat(lng),
-                last_known_location_updated_at: new Date().toISOString()
-            })
-            .eq('id', authReq.user._id);
+        const role = authReq.user.role;
+        
+        // Support both old format (lat, lng) and new format (address, coordinates)
+        const latitude = coordinates?.lat || lat;
+        const longitude = coordinates?.lng || lng;
+        
+        if (!latitude || !longitude) {
+            return res.status(400).json({ success: false, error: "lat and lng are required" });
+        }
 
-        res.json({ success: true, message: "Location updated" });
+        if (role === "ECENTRE") {
+            // Update E-Centre location
+            const { error } = await supabase
+                .from('ecentres')
+                .update({
+                    location_address: address || "",
+                    location_lat: parseFloat(latitude),
+                    location_lng: parseFloat(longitude),
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', authReq.user._id);
+
+            if (error) throw error;
+            
+            console.log('✅ E-Centre location updated');
+        } else {
+            // Update User location
+            const { error } = await supabase
+                .from('users')
+                .update({
+                    last_known_lat: parseFloat(latitude),
+                    last_known_lng: parseFloat(longitude),
+                    last_known_location_updated_at: new Date().toISOString()
+                })
+                .eq('id', authReq.user._id);
+
+            if (error) throw error;
+            
+            console.log('✅ User location updated');
+        }
+
+        res.json({ success: true, message: "Location updated successfully" });
     } catch (error: any) {
         console.error("Update location error:", error);
         res.status(500).json({ success: false, error: "Failed to update location" });

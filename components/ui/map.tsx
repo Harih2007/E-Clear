@@ -27,7 +27,28 @@ const blueIcon = L.icon({
     iconAnchor: [12, 41],
 });
 
-interface MapProps {
+const redIcon = L.icon({
+    iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+});
+
+const violetIcon = L.icon({
+    iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+});
+
+const orangeIcon = L.icon({
+    iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+});
+
+interface MapPropsOld {
     userLocation?: { lat: number; lng: number };
     eCentres?: Array<{
         name: string;
@@ -35,6 +56,18 @@ interface MapProps {
         coordinates: { lat: number; lng: number };
     }>;
 }
+
+interface MapPropsNew {
+    center: { lat: number; lng: number };
+    markers: Array<{
+        position: { lat: number; lng: number };
+        title: string;
+        type: "user" | "ecentre" | "pending" | "scheduled" | "collected";
+    }>;
+    zoom?: number;
+}
+
+type MapProps = MapPropsOld | MapPropsNew;
 
 // Component to update map center when location changes
 function ChangeMapView({ center }: { center: [number, number] }) {
@@ -51,11 +84,58 @@ function ChangeMapView({ center }: { center: [number, number] }) {
     return null;
 }
 
-export default function Map({ userLocation, eCentres }: MapProps) {
-    // Default center (Delhi, India)
+function getIconForType(type: string) {
+    switch (type) {
+        case "user": return blueIcon;
+        case "ecentre": return greenIcon;
+        case "pending": return orangeIcon;
+        case "scheduled": return violetIcon;
+        case "collected": return greenIcon;
+        default: return icon;
+    }
+}
+
+export default function Map(props: MapProps) {
+    // Check if it's the new props format
+    const isNewFormat = 'center' in props && 'markers' in props;
+    
+    if (isNewFormat) {
+        const { center, markers, zoom = 13 } = props;
+        const mapCenter: [number, number] = [center.lat, center.lng];
+        const mapKey = `${center.lat.toFixed(2)}-${center.lng.toFixed(2)}`;
+
+        return (
+            <MapContainer 
+                key={mapKey}
+                center={mapCenter} 
+                zoom={zoom} 
+                scrollWheelZoom={false} 
+                className="h-full w-full"
+            >
+                <TileLayer
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                
+                {markers.map((marker, idx) => (
+                    <Marker 
+                        key={idx} 
+                        position={[marker.position.lat, marker.position.lng]} 
+                        icon={getIconForType(marker.type)}
+                    >
+                        <Popup>
+                            <strong>{marker.title}</strong>
+                        </Popup>
+                    </Marker>
+                ))}
+            </MapContainer>
+        );
+    }
+
+    // Old format (backward compatibility)
+    const { userLocation, eCentres } = props;
     const defaultCenter: [number, number] = [28.6139, 77.2090];
     
-    // Only use user location if both lat and lng are valid numbers
     const center: [number, number] = (userLocation && 
                                       typeof userLocation.lat === 'number' && 
                                       typeof userLocation.lng === 'number' &&
@@ -64,7 +144,6 @@ export default function Map({ userLocation, eCentres }: MapProps) {
         ? [userLocation.lat, userLocation.lng] 
         : defaultCenter;
 
-    // Create a unique key for the map to force remount on significant location changes
     const mapKey = `${center[0].toFixed(2)}-${center[1].toFixed(2)}`;
 
     return (
@@ -80,7 +159,6 @@ export default function Map({ userLocation, eCentres }: MapProps) {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
             
-            {/* User Location Marker (Blue) */}
             {userLocation && 
              typeof userLocation.lat === 'number' && 
              typeof userLocation.lng === 'number' &&
@@ -93,7 +171,6 @@ export default function Map({ userLocation, eCentres }: MapProps) {
                 </Marker>
             )}
 
-            {/* E-Centre Markers */}
             {eCentres && eCentres.map((centre, idx) => (
                 <Marker 
                     key={idx} 

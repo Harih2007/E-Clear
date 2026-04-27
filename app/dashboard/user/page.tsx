@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Leaf, MapPin, Smartphone, Battery, Laptop, CheckCircle, Clock, Trash2, Box, Users, Package } from "lucide-react"
+import { Leaf, MapPin, Smartphone, Battery, Laptop, CheckCircle, Clock, Trash2, Box, Users, Package, Phone, User, Trash } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { api, handleApiError } from "@/lib/api"
 import { Modal } from "@/components/ui/modal"
@@ -18,7 +18,7 @@ const Map = dynamic(() => import("@/components/ui/map"), {
 })
 
 export default function UserDashboard() {
-    const { user, isAuthenticated } = useAuth()
+    const { user, isAuthenticated, isLoading } = useAuth()
     const router = useRouter()
 
     const [requests, setRequests] = useState<any[]>([])
@@ -71,6 +71,9 @@ export default function UserDashboard() {
     }
 
     useEffect(() => {
+        // Wait for auth to load
+        if (isLoading) return;
+        
         if (!isAuthenticated) {
             router.push("/auth/login-user")
             return
@@ -114,7 +117,7 @@ export default function UserDashboard() {
         }
 
         fetchData()
-    }, [isAuthenticated, user])
+    }, [isAuthenticated, user, isLoading])
 
     const fetchData = async () => {
         if (!user) return
@@ -135,18 +138,72 @@ export default function UserDashboard() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
+        
+        // Validate location is set
+        if (!formData.address || formData.address === "123 Green St" || !formData.pincode) {
+            alert('⚠️ Please set your location before submitting a request!')
+            setIsLocationModalOpen(true)
+            return
+        }
+        
+        if (!userLocation) {
+            alert('⚠️ Please set your location on the map before submitting a request!')
+            setIsLocationModalOpen(true)
+            return
+        }
+        
         try {
-            await api.post("/disposal/request", {
+            const response = await api.post("/disposal/request", {
                 items: [{ type: formData.type, quantity: Number(formData.quantity) }],
                 address: formData.address,
                 pincode: formData.pincode,
-                coordinates: userLocation || undefined
+                coordinates: userLocation
             })
+            
+            console.log('✅ Request submitted successfully:', response.data)
+            
+            // Close modal and refresh data
             setIsModalOpen(false)
+            await fetchData() // Refresh to show new request
+            
+            // Show success message
+            alert('✅ Pickup request submitted successfully!')
+        } catch (err: any) {
+            console.error('❌ Error submitting request:', err)
+            console.error('Error response:', err.response?.data)
+            alert(handleApiError(err))
+        }
+    }
+
+    const handleDeleteRequest = async (requestId: string, createdAt: string) => {
+        // Check if within 2 hours
+        const createdTime = new Date(createdAt).getTime()
+        const currentTime = new Date().getTime()
+        const hoursDiff = (currentTime - createdTime) / (1000 * 60 * 60)
+        
+        if (hoursDiff > 2) {
+            alert('❌ You can only delete requests within 2 hours of creation.')
+            return
+        }
+        
+        if (!confirm('Are you sure you want to delete this pickup request?')) {
+            return
+        }
+        
+        try {
+            await api.delete(`/disposal/${requestId}`)
+            alert('✅ Request deleted successfully!')
             fetchData() // Refresh
         } catch (err) {
             alert(handleApiError(err))
         }
+    }
+
+    const canDeleteRequest = (createdAt: string) => {
+        const createdTime = new Date(createdAt).getTime()
+        const currentTime = new Date().getTime()
+        const hoursDiff = (currentTime - createdTime) / (1000 * 60 * 60)
+        return hoursDiff <= 2
     }
 
     const handleLocationSelect = (location: string) => {
@@ -318,29 +375,71 @@ export default function UserDashboard() {
                                 </div>
                             ) : (
                                 requests.map((req, i) => (
-                                    <div key={i} className="flex items-center justify-between p-4 rounded-xl border border-emerald-100 bg-emerald-50/30 hover:bg-emerald-50/50 transition-colors">
-                                        <div className="flex items-center gap-4">
-                                            <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700">
-                                                {getIcon(req.items[0].type)}
+                                    <div key={i} className="p-4 rounded-xl border border-emerald-100 bg-emerald-50/30 hover:bg-emerald-50/50 transition-colors">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <div className="flex items-center gap-4">
+                                                <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700">
+                                                    {getIcon(req.items[0].type)}
+                                                </div>
+                                                <div>
+                                                    <p className="font-semibold text-emerald-900">{req.items[0].type}</p>
+                                                    <p className="text-sm text-gray-600">Qty: {req.items[0].quantity} • ID: {req._id.slice(-6)}</p>
+                                                    {req.status === "GROUPING" && req.groupingProgress && (
+                                                        <p className="text-xs text-emerald-600 mt-1 font-medium">
+                                                            {req.groupingProgress.current}/{req.groupingProgress.target} households grouped
+                                                        </p>
+                                                    )}
+                                                </div>
                                             </div>
-                                            <div>
-                                                <p className="font-semibold text-emerald-900">{req.items[0].type}</p>
-                                                <p className="text-sm text-gray-600">Qty: {req.items[0].quantity} • ID: {req._id.slice(-6)}</p>
-                                                {req.status === "GROUPING" && req.groupingProgress && (
-                                                    <p className="text-xs text-emerald-600 mt-1 font-medium">
-                                                        {req.groupingProgress.current}/{req.groupingProgress.target} households grouped
-                                                    </p>
+                                            <div className="flex items-center gap-2">
+                                                <div className={`px-3 py-1.5 rounded-lg font-semibold text-xs ${
+                                                    req.status === "COLLECTED" ? "bg-emerald-100 text-emerald-700" :
+                                                    req.status === "SCHEDULED" ? "bg-blue-100 text-blue-700" :
+                                                    req.status === "GROUPING" ? "bg-amber-100 text-amber-700" :
+                                                    "bg-gray-100 text-gray-600"
+                                                }`}>
+                                                    {req.status}
+                                                </div>
+                                                {canDeleteRequest(req.createdAt) && req.status !== "COLLECTED" && (
+                                                    <Button
+                                                        size="sm"
+                                                        onClick={() => handleDeleteRequest(req._id, req.createdAt)}
+                                                        className="h-8 w-8 p-0 bg-red-100 hover:bg-red-200 text-red-600 rounded-lg border-0"
+                                                        title="Delete request (within 2 hours)"
+                                                    >
+                                                        <Trash className="h-4 w-4" />
+                                                    </Button>
                                                 )}
                                             </div>
                                         </div>
-                                        <div className={`px-3 py-1.5 rounded-lg font-semibold text-xs ${
-                                            req.status === "COLLECTED" ? "bg-emerald-100 text-emerald-700" :
-                                            req.status === "SCHEDULED" ? "bg-blue-100 text-blue-700" :
-                                            req.status === "GROUPING" ? "bg-amber-100 text-amber-700" :
-                                            "bg-gray-100 text-gray-600"
-                                        }`}>
-                                            {req.status}
-                                        </div>
+                                        
+                                        {/* Pickup Person Details */}
+                                        {req.pickupPerson && (req.status === "SCHEDULED" || req.status === "COLLECTED") && (
+                                            <div className="mt-3 pt-3 border-t border-emerald-200">
+                                                <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-2">
+                                                    Pickup Person Details
+                                                </p>
+                                                <div className="flex items-center gap-4">
+                                                    <div className="flex items-center gap-2 text-sm">
+                                                        <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+                                                            <User className="h-4 w-4 text-emerald-600" />
+                                                        </div>
+                                                        <span className="font-medium text-gray-900">{req.pickupPerson.name}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 text-sm">
+                                                        <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                                                            <Phone className="h-4 w-4 text-blue-600" />
+                                                        </div>
+                                                        <a 
+                                                            href={`tel:${req.pickupPerson.phoneNumber}`}
+                                                            className="font-medium text-blue-600 hover:text-blue-700 hover:underline"
+                                                        >
+                                                            {req.pickupPerson.phoneNumber}
+                                                        </a>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 ))
                             )}
@@ -486,8 +585,65 @@ export default function UserDashboard() {
             </Modal>
 
             {/* Location Selection Modal */}
-            <Modal isOpen={isLocationModalOpen} onClose={() => setIsLocationModalOpen(false)} title="Search for your location">
+            <Modal isOpen={isLocationModalOpen} onClose={() => setIsLocationModalOpen(false)} title="Set Your Location">
                 <div className="space-y-4">
+                    {/* Use Current Location Button */}
+                    <Button
+                        onClick={() => {
+                            if (navigator.geolocation) {
+                                navigator.geolocation.getCurrentPosition(
+                                    async (position) => {
+                                        const { latitude, longitude } = position.coords;
+                                        setUserLocation({ lat: latitude, lng: longitude });
+                                        
+                                        // Reverse geocode to get address
+                                        try {
+                                            const response = await fetch(
+                                                `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`
+                                            );
+                                            const data = await response.json();
+                                            const address = data.display_name || `${latitude}, ${longitude}`;
+                                            const pincode = data.address?.postcode || '';
+                                            
+                                            setLocationAddress(address);
+                                            setFormData(prev => ({ ...prev, address, pincode }));
+                                            fetchNearbyECentres(latitude, longitude);
+                                            
+                                            alert('✅ Location detected successfully!');
+                                        } catch (error) {
+                                            console.error('Geocoding error:', error);
+                                            setLocationAddress(`${latitude}, ${longitude}`);
+                                            setFormData(prev => ({ 
+                                                ...prev, 
+                                                address: `${latitude}, ${longitude}`,
+                                                pincode: ''
+                                            }));
+                                        }
+                                    },
+                                    (error) => {
+                                        alert('❌ Could not get your location. Please enable location services or enter manually.');
+                                        console.error('Geolocation error:', error);
+                                    },
+                                    { enableHighAccuracy: true, timeout: 10000 }
+                                );
+                            } else {
+                                alert('❌ Geolocation is not supported by your browser');
+                            }
+                        }}
+                        className="w-full h-12 font-semibold rounded-xl bg-blue-600 hover:bg-blue-700 text-white border-0"
+                    >
+                        📍 Use My Current Location
+                    </Button>
+                    
+                    <div className="relative">
+                        <div className="absolute inset-0 flex items-center">
+                            <div className="w-full border-t border-gray-300"></div>
+                        </div>
+                        <div className="relative flex justify-center text-sm">
+                            <span className="px-2 bg-white text-gray-500">OR</span>
+                        </div>
+                    </div>
+                    
                     {/* Google Autocomplete Search */}
                     <GoogleAutocomplete 
                         onPlaceSelect={handleGooglePlaceSelect}

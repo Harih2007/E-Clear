@@ -40,18 +40,8 @@ export const createDisposalRequest = async (req: AuthRequest, res: Response) => 
             return res.status(400).json({ error: "Address and pincode are required" });
         }
 
-        // Check for active request
-        const { data: activeReq } = await supabase
-            .from('disposal_requests')
-            .select('id')
-            .eq('user_id', req.user._id)
-            .in('status', ['PENDING', 'GROUPING', 'ACCEPTED', 'SCHEDULED'])
-            .limit(1)
-            .single();
-
-        if (activeReq) {
-            return res.status(400).json({ error: "You already have an active pickup request." });
-        }
+        // Allow multiple requests - removed the active request check
+        // Users can now submit multiple pickup requests
 
         const estimatedIncentive = calculateIncentive(items);
 
@@ -157,26 +147,53 @@ export const getUserRequests = async (req: AuthRequest, res: Response) => {
 
         if (error) throw error;
 
-        // Format for frontend compatibility
-        const formattedRequests = (requests || []).map(r => ({
-            _id: r.id,
-            userId: r.user_id,
-            eCentreId: r.ecentre_id,
-            poolId: r.pool_id,
-            items: r.items,
-            location: {
-                address: r.location_address,
-                pincode: r.location_pincode,
-                coordinates: r.location_lat ? { lat: r.location_lat, lng: r.location_lng } : undefined
-            },
-            imageUrl: r.image_url,
-            description: r.description,
-            status: r.status,
-            estimatedIncentive: { min: r.estimated_incentive_min, max: r.estimated_incentive_max },
-            actualIncentive: r.actual_incentive,
-            groupingProgress: { current: r.grouping_current, target: r.grouping_target },
-            createdAt: r.created_at,
-            updatedAt: r.updated_at
+        // Fetch E-Centre details for scheduled/collected requests
+        const formattedRequests = await Promise.all((requests || []).map(async (r) => {
+            let pickupPerson = null;
+            
+            // If request is scheduled or collected, get pickup person details
+            if ((r.status === 'SCHEDULED' || r.status === 'COLLECTED')) {
+                // First check if there's an assigned pickup person
+                if (r.assigned_pickup_person) {
+                    pickupPerson = r.assigned_pickup_person;
+                } else if (r.ecentre_id) {
+                    // Fallback to E-Centre details if no specific person assigned
+                    const { data: eCentre } = await supabase
+                        .from('ecentres')
+                        .select('name, phone_number')
+                        .eq('id', r.ecentre_id)
+                        .single();
+                    
+                    if (eCentre) {
+                        pickupPerson = {
+                            name: eCentre.name,
+                            phoneNumber: eCentre.phone_number
+                        };
+                    }
+                }
+            }
+
+            return {
+                _id: r.id,
+                userId: r.user_id,
+                eCentreId: r.ecentre_id,
+                poolId: r.pool_id,
+                items: r.items,
+                location: {
+                    address: r.location_address,
+                    pincode: r.location_pincode,
+                    coordinates: r.location_lat ? { lat: r.location_lat, lng: r.location_lng } : undefined
+                },
+                imageUrl: r.image_url,
+                description: r.description,
+                status: r.status,
+                estimatedIncentive: { min: r.estimated_incentive_min, max: r.estimated_incentive_max },
+                actualIncentive: r.actual_incentive,
+                groupingProgress: { current: r.grouping_current, target: r.grouping_target },
+                pickupPerson,
+                createdAt: r.created_at,
+                updatedAt: r.updated_at
+            };
         }));
 
         res.json({ success: true, data: formattedRequests });
@@ -230,23 +247,44 @@ export const getAllRequests = async (req: AuthRequest, res: Response) => {
 
         if (error) throw error;
 
-        // Format for frontend
-        const formattedRequests = (requests || []).map(r => ({
-            _id: r.id,
-            userId: r.user_id,
-            eCentreId: r.ecentre_id,
-            poolId: r.pool_id,
-            items: r.items,
-            location: {
-                address: r.location_address,
-                pincode: r.location_pincode,
-                coordinates: r.location_lat ? { lat: r.location_lat, lng: r.location_lng } : undefined
-            },
-            status: r.status,
-            estimatedIncentive: { min: r.estimated_incentive_min, max: r.estimated_incentive_max },
-            groupingProgress: { current: r.grouping_current, target: r.grouping_target },
-            createdAt: r.created_at,
-            updatedAt: r.updated_at
+        // Fetch user details for each request
+        const formattedRequests = await Promise.all((requests || []).map(async (r) => {
+            let userDetails = null;
+            
+            // Fetch user name and phone number
+            if (r.user_id) {
+                const { data: user } = await supabase
+                    .from('users')
+                    .select('name, phone_number')
+                    .eq('id', r.user_id)
+                    .single();
+                
+                if (user) {
+                    userDetails = {
+                        name: user.name,
+                        phoneNumber: user.phone_number
+                    };
+                }
+            }
+
+            return {
+                _id: r.id,
+                userId: r.user_id,
+                eCentreId: r.ecentre_id,
+                poolId: r.pool_id,
+                items: r.items,
+                location: {
+                    address: r.location_address,
+                    pincode: r.location_pincode,
+                    coordinates: r.location_lat ? { lat: r.location_lat, lng: r.location_lng } : undefined
+                },
+                status: r.status,
+                estimatedIncentive: { min: r.estimated_incentive_min, max: r.estimated_incentive_max },
+                groupingProgress: { current: r.grouping_current, target: r.grouping_target },
+                userDetails,
+                createdAt: r.created_at,
+                updatedAt: r.updated_at
+            };
         }));
 
         res.json({ success: true, data: formattedRequests });
@@ -322,5 +360,210 @@ export const getReportsByLocation = async (req: AuthRequest, res: Response) => {
     } catch (error: any) {
         console.error("Get reports by location error:", error);
         res.status(500).json({ success: false, error: "Failed to fetch reports" });
+    }
+};
+
+// Update Disposal Request Status (E-Centre only)
+export const updateDisposalStatus = async (req: AuthRequest, res: Response) => {
+    try {
+        console.log('=== UPDATE DISPOSAL STATUS ===');
+        console.log('User:', req.user);
+        console.log('Request ID:', req.params.id);
+        console.log('Body:', req.body);
+        
+        if (req.user?.role !== "ECENTRE") {
+            return res.status(403).json({ success: false, error: "Only E-Centres can update request status" });
+        }
+
+        const { id } = req.params;
+        const { status, assignedPickupPerson } = req.body;
+
+        if (!status) {
+            return res.status(400).json({ success: false, error: "Status is required" });
+        }
+
+        // Verify request belongs to this E-Centre
+        const { data: request, error: reqError } = await supabase
+            .from('disposal_requests')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (reqError || !request) {
+            return res.status(404).json({ success: false, error: "Request not found" });
+        }
+
+        if (request.ecentre_id !== req.user._id) {
+            return res.status(403).json({ success: false, error: "Not authorized for this request" });
+        }
+
+        // Prepare update data
+        const updateData: any = {
+            status,
+            updated_at: new Date().toISOString()
+        };
+
+        // If assigning a pickup person, add it to the update
+        if (assignedPickupPerson) {
+            console.log('Adding assigned pickup person:', assignedPickupPerson);
+            updateData.assigned_pickup_person = assignedPickupPerson;
+        }
+
+        console.log('Update data:', updateData);
+
+        // Update status
+        const { error: updateError } = await supabase
+            .from('disposal_requests')
+            .update(updateData)
+            .eq('id', id);
+
+        if (updateError) {
+            console.error('Supabase update error:', updateError);
+            throw updateError;
+        }
+
+        console.log('Update successful!');
+
+        // If marking as collected, add incentive points to user
+        if (status === 'COLLECTED') {
+            const { data: user } = await supabase
+                .from('users')
+                .select('points')
+                .eq('id', request.user_id)
+                .single();
+            
+            if (user) {
+                await supabase
+                    .from('users')
+                    .update({ 
+                        points: (user.points || 0) + (request.estimated_incentive_min || 10) 
+                    })
+                    .eq('id', request.user_id);
+            }
+
+            // Increment E-Centre completed pickups
+            const { data: eCentre } = await supabase
+                .from('ecentres')
+                .select('completed_pickups')
+                .eq('id', req.user._id)
+                .single();
+
+            if (eCentre) {
+                await supabase
+                    .from('ecentres')
+                    .update({ 
+                        completed_pickups: (eCentre.completed_pickups || 0) + 1 
+                    })
+                    .eq('id', req.user._id);
+            }
+        }
+
+        res.json({ success: true, message: `Status updated to ${status}` });
+    } catch (error: any) {
+        console.error("Update disposal status error:", error);
+        res.status(500).json({ success: false, error: "Failed to update status" });
+    }
+};
+
+// Delete Disposal Request (User only, within 2 hours)
+export const deleteDisposalRequest = async (req: AuthRequest, res: Response) => {
+    try {
+        if (req.user?.role !== "USER") {
+            return res.status(403).json({ success: false, error: "Only users can delete their requests" });
+        }
+
+        const { id } = req.params;
+
+        // Get the request
+        const { data: request, error: reqError } = await supabase
+            .from('disposal_requests')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (reqError || !request) {
+            return res.status(404).json({ success: false, error: "Request not found" });
+        }
+
+        // Verify ownership
+        if (request.user_id !== req.user._id) {
+            return res.status(403).json({ success: false, error: "Not authorized to delete this request" });
+        }
+
+        // Check if within 2 hours
+        const createdTime = new Date(request.created_at).getTime();
+        const currentTime = new Date().getTime();
+        const hoursDiff = (currentTime - createdTime) / (1000 * 60 * 60);
+
+        if (hoursDiff > 2) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "You can only delete requests within 2 hours of creation" 
+            });
+        }
+
+        // Don't allow deletion if already collected
+        if (request.status === 'COLLECTED') {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Cannot delete completed requests" 
+            });
+        }
+
+        // Update the pool if request was part of one
+        if (request.pool_id) {
+            const { data: pool } = await supabase
+                .from('pickup_pools')
+                .select('*')
+                .eq('id', request.pool_id)
+                .single();
+
+            if (pool) {
+                // Remove this request from the pool's request_ids array
+                const updatedRequestIds = (pool.request_ids || []).filter((rid: string) => rid !== id);
+                const newCount = updatedRequestIds.length;
+
+                await supabase
+                    .from('pickup_pools')
+                    .update({
+                        request_ids: updatedRequestIds,
+                        current_count: newCount,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('id', request.pool_id);
+
+                // Update grouping progress for remaining requests in the pool
+                if (updatedRequestIds.length > 0) {
+                    await supabase
+                        .from('disposal_requests')
+                        .update({
+                            grouping_current: newCount,
+                            updated_at: new Date().toISOString()
+                        })
+                        .in('id', updatedRequestIds);
+                }
+
+                // If pool is now empty, delete it
+                if (newCount === 0) {
+                    await supabase
+                        .from('pickup_pools')
+                        .delete()
+                        .eq('id', request.pool_id);
+                }
+            }
+        }
+
+        // Delete the request
+        const { error: deleteError } = await supabase
+            .from('disposal_requests')
+            .delete()
+            .eq('id', id);
+
+        if (deleteError) throw deleteError;
+
+        res.json({ success: true, message: "Request deleted successfully" });
+    } catch (error: any) {
+        console.error("Delete disposal request error:", error);
+        res.status(500).json({ success: false, error: "Failed to delete request" });
     }
 };

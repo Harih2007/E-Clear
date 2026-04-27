@@ -27,6 +27,8 @@ router.patch("/auth/update-location", authenticate, AuthController.updateLocatio
 router.post("/disposal/request", authenticate, isUser, DisposalController.createDisposalRequest);
 router.get("/disposal/my-requests", authenticate, isUser, DisposalController.getUserRequests);
 router.get("/disposal/requests", authenticate, isECentre, DisposalController.getAllRequests);
+router.patch("/disposal/:id/status", authenticate, isECentre, DisposalController.updateDisposalStatus);
+router.delete("/disposal/:id", authenticate, isUser, DisposalController.deleteDisposalRequest);
 
 // View Nearby E-Centres (pincode-based)
 router.get("/ecentres/nearby", authenticate, isUser, PickupController.getNearbyECentres);
